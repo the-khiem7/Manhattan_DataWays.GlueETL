@@ -1,0 +1,23 @@
+| Source key            | Target key            | Data type | Drop? |
+| --------------------- | --------------------- | --------- | ----- |
+| vendorid              | vendorid              | int       | false |
+| tpep_pickup_datetime  | tpep_pickup_datetime  | timestamp | false |
+| tpep_dropoff_datetime | tpep_dropoff_datetime | timestamp | false |
+| passenger_count       | passenger_count       | long      | false |
+| trip_distance         | trip_distance         | double    | false |
+| ratecodeid            | ratecodeid            | long      | false |
+| store_and_fwd_flag    | store_and_fwd_flag    | string    | false |
+| pulocationid          | pulocationid          | int       | false |
+| dolocationid          | dolocationid          | int       | false |
+| payment_type          | payment_type          | long      | false |
+| fare_amount           | fare_amount           | double    | false |
+| extra                 | extra                 | double    | false |
+| mta_tax               | mta_tax               | double    | false |
+| tip_amount            | tip_amount            | double    | false |
+| tolls_amount          | tolls_amount          | double    | false |
+| improvement_surcharge | improvement_surcharge | double    | false |
+| total_amount          | total_amount          | double    | false |
+| congestion_surcharge  | congestion_surcharge  | double    | false |
+| airport_fee           | airport_fee           | double    | false |
+| cbd_congestion_fee    | cbd_congestion_fee    | double    | false |
+| partition_0           | partition_0           | string    | false |
