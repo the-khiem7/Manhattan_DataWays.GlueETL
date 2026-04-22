@@ -49,6 +49,19 @@ The source data is based on TLC yellow taxi trip parquet data. Before using the 
 
 Do not assume `DataSchema.md` alone is enough. Validate against the actual Glue Catalog table or the parquet sample when changing the job.
 
+The implementation standardizes on lowercase target-style field names internally. The transform is expected to accept either:
+
+- raw TLC-style names from parquet or Glue Catalog inference
+- already-renamed canonical names from `Change Schema`
+
+Current canonical examples:
+
+- `vendorid`
+- `ratecodeid`
+- `pulocationid`
+- `dolocationid`
+- `airport_fee`
+
 ## Recommended Validation Rules
 
 Reject rows when any hard-failure rule is true:

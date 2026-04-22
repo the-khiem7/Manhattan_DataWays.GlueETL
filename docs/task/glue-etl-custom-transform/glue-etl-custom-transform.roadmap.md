@@ -68,7 +68,7 @@ Exit criteria:
 
 ### Phase 2: Schema normalization
 
-Status: `pending`
+Status: `completed`
 
 Tasks:
 
@@ -182,3 +182,5 @@ Use this section for resumable updates. Append new entries instead of rewriting 
 - Confirmed from the 50-row parquet sample that real invalid examples already exist for validation testing.
 - Created `glue_jobs/yellow_taxitrip_custom_transform.py` as the initial script skeleton.
 - Declared the current transform contract with a single `processed` output and no quarantine sink.
+- Chose lowercase target-style field names as the canonical internal schema.
+- Added raw-to-canonical field mapping and basic type coercion so the transform can tolerate either raw parquet names or renamed Glue columns.
