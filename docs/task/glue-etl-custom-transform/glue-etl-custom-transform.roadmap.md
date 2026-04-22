@@ -89,7 +89,7 @@ Exit criteria:
 
 ### Phase 3: Validation and cleaning logic
 
-Status: `pending`
+Status: `completed`
 
 Tasks:
 
@@ -184,3 +184,5 @@ Use this section for resumable updates. Append new entries instead of rewriting 
 - Declared the current transform contract with a single `processed` output and no quarantine sink.
 - Chose lowercase target-style field names as the canonical internal schema.
 - Added raw-to-canonical field mapping and basic type coercion so the transform can tolerate either raw parquet names or renamed Glue columns.
+- Added record enrichment with `trip_duration_hours`, `is_valid`, `error_reason`, `warning_reason`, and `is_outlier`.
+- Implemented hard-failure checks for required fields, duplicates, categorical validity, time logic, passenger count, distance, fare, and cash-tip inconsistency.

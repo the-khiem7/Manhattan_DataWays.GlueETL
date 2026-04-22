@@ -83,6 +83,14 @@ Retain rows when only soft anomalies are present, if the team decides to keep wa
 
 If warnings are retained, keep the warning columns in the processed dataset only if they are useful for downstream analytics.
 
+The current implementation also enriches each canonical row with audit fields before final output filtering:
+
+- `trip_duration_hours`
+- `is_valid`
+- `error_reason`
+- `warning_reason`
+- `is_outlier`
+
 ## Recommended Logging
 
 Because rejected rows are not written to S3, logs become the main operational signal.
