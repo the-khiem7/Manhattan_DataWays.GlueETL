@@ -118,8 +118,18 @@ If available in the Glue runtime, also publish counters to CloudWatch-compatible
 
 - Use `Change Schema` for simple casting and renaming, not for dense business validation logic.
 - Keep the Python custom transform focused on row-level and cross-column validation.
+- The finalized output key is `processed`.
 - If the visual node still outputs a collection, ensure the selected collection key is the valid processed output only.
 - Remove any leftover quarantine naming from node labels, comments, and sink paths.
+
+The current code keeps these columns in the processed output:
+
+- canonical business columns
+- `trip_duration_hours`
+- `warning_reason`
+- `is_outlier`
+
+It does not persist rejected rows or `error_reason` columns to S3.
 
 ## Verification Checklist
 

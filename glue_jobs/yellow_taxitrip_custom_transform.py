@@ -7,11 +7,26 @@ fits Glue Studio custom-transform usage.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+try:
+    from awsglue.dynamicframe import DynamicFrame, DynamicFrameCollection
+except ImportError:  # pragma: no cover - unavailable in local development.
+    DynamicFrame = None
+    DynamicFrameCollection = None
+
+try:
+    from pyspark.sql import DataFrame
+    from pyspark.sql import functions as F
+    from pyspark.sql.window import Window
+except ImportError:  # pragma: no cover - unavailable in local development.
+    DataFrame = None
+    F = None
+    Window = None
 
 CANONICAL_OUTPUT_KEY = "processed"
 DEFAULT_INPUT_KEY = "ChangeSchema_node1745291490952"
@@ -138,12 +153,28 @@ AUDIT_COLUMNS: Sequence[str] = (
     "warning_reason",
     "is_outlier",
 )
+PROCESSED_OUTPUT_COLUMNS: Sequence[str] = (
+    *CANONICAL_COLUMNS,
+    "trip_duration_hours",
+    "warning_reason",
+    "is_outlier",
+)
+
+LOGGER = logging.getLogger(__name__)
 
 
 def get_transform_contract() -> TransformContract:
     """Return the declared I/O contract for docs, tests, and Glue wiring."""
 
     return TransformContract()
+
+
+def _get_source_candidates(canonical_key: str) -> List[str]:
+    candidates = [canonical_key]
+    for source_key, mapped_key in RAW_TO_CANONICAL_MAP.items():
+        if mapped_key == canonical_key and source_key not in candidates:
+            candidates.append(source_key)
+    return candidates
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -334,25 +365,304 @@ def transform_records(records: Iterable[MutableMapping[str, Any]]) -> List[Dict[
     return transformed_records
 
 
+def summarize_transformed_records(records: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "total_records": len(records),
+        "valid_records": 0,
+        "invalid_records": 0,
+        "outlier_records": 0,
+        "error_counts": {},
+        "warning_counts": {},
+    }
+
+    for record in records:
+        if record.get("is_valid"):
+            summary["valid_records"] += 1
+        else:
+            summary["invalid_records"] += 1
+
+        if record.get("is_outlier"):
+            summary["outlier_records"] += 1
+
+        for reason in filter(None, str(record.get("error_reason", "")).split("|")):
+            summary["error_counts"][reason] = summary["error_counts"].get(reason, 0) + 1
+
+        for reason in filter(None, str(record.get("warning_reason", "")).split("|")):
+            summary["warning_counts"][reason] = summary["warning_counts"].get(reason, 0) + 1
+
+    return summary
+
+
+def filter_processed_records(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    processed_records: List[Dict[str, Any]] = []
+    for record in records:
+        if not record.get("is_valid"):
+            continue
+        processed_records.append(
+            {column: record.get(column) for column in PROCESSED_OUTPUT_COLUMNS}
+        )
+    return processed_records
+
+
+def _log_summary(summary: Mapping[str, Any]) -> None:
+    LOGGER.info(
+        "Processed Glue ETL records: total=%s valid=%s invalid=%s outliers=%s",
+        summary.get("total_records"),
+        summary.get("valid_records"),
+        summary.get("invalid_records"),
+        summary.get("outlier_records"),
+    )
+    for reason, count in sorted(summary.get("error_counts", {}).items()):
+        LOGGER.info("Rejected rows for %s=%s", reason, count)
+    for reason, count in sorted(summary.get("warning_counts", {}).items()):
+        LOGGER.info("Warning rows for %s=%s", reason, count)
+
+
+def run_local_transform(records: Iterable[MutableMapping[str, Any]]) -> Dict[str, Any]:
+    transformed_records = transform_records(records)
+    summary = summarize_transformed_records(transformed_records)
+    processed_records = filter_processed_records(transformed_records)
+    _log_summary(summary)
+    return {
+        "output_key": CANONICAL_OUTPUT_KEY,
+        "processed_records": processed_records,
+        "summary": summary,
+        "transformed_records": transformed_records,
+    }
+
+
+def _normalize_spark_input_df(input_df: Any) -> Any:
+    if F is None:
+        raise RuntimeError("pyspark is required for Glue DataFrame execution")
+
+    available_columns = set(input_df.columns)
+    projected_columns = []
+    for canonical_key in CANONICAL_COLUMNS:
+        source_column = next(
+            (candidate for candidate in _get_source_candidates(canonical_key) if candidate in available_columns),
+            None,
+        )
+        if source_column is None:
+            projected_column = F.lit(None).alias(canonical_key)
+        else:
+            projected_column = F.col(source_column).alias(canonical_key)
+        projected_columns.append(projected_column)
+
+    normalized_df = input_df.select(*projected_columns)
+
+    for column in INTEGER_COLUMNS:
+        normalized_df = normalized_df.withColumn(column, F.col(column).cast("int"))
+
+    for column in FLOAT_COLUMNS:
+        normalized_df = normalized_df.withColumn(column, F.col(column).cast("double"))
+
+    for column in TIMESTAMP_COLUMNS:
+        normalized_df = normalized_df.withColumn(column, F.col(column).cast("timestamp"))
+
+    normalized_df = normalized_df.withColumn(
+        "store_and_fwd_flag",
+        F.when(
+            F.col("store_and_fwd_flag").isNull(),
+            F.lit(None),
+        ).otherwise(F.upper(F.trim(F.col("store_and_fwd_flag")))),
+    )
+    normalized_df = normalized_df.withColumn(
+        "partition_0",
+        F.when(F.col("partition_0").isNull(), F.lit(None)).otherwise(F.trim(F.col("partition_0"))),
+    )
+    return normalized_df
+
+
+def _transform_spark_df(input_df: Any) -> Any:
+    if F is None or Window is None:
+        raise RuntimeError("pyspark is required for Glue DataFrame execution")
+
+    thresholds = ValidationThresholds()
+    normalized_df = _normalize_spark_input_df(input_df)
+    duplicate_window = Window.partitionBy(
+        "vendorid",
+        "tpep_pickup_datetime",
+        "tpep_dropoff_datetime",
+        "passenger_count",
+        "trip_distance",
+        "fare_amount",
+        "total_amount",
+    ).orderBy(F.col("tpep_pickup_datetime"))
+
+    enriched_df = normalized_df.withColumn(
+        "trip_duration_hours",
+        (
+            F.col("tpep_dropoff_datetime").cast("long")
+            - F.col("tpep_pickup_datetime").cast("long")
+        )
+        / F.lit(3600.0),
+    ).withColumn(
+        "_duplicate_rank",
+        F.row_number().over(duplicate_window),
+    )
+
+    error_reason_candidates = [
+        F.when(F.col(column).isNull(), F.lit(f"missing_{column}"))
+        for column in REQUIRED_COLUMNS
+    ] + [
+        F.when(
+            F.col("store_and_fwd_flag").isNotNull()
+            & (~F.col("store_and_fwd_flag").isin(*sorted(VALID_STORE_AND_FWD_FLAGS))),
+            F.lit("invalid_store_and_fwd_flag"),
+        ),
+        F.when(
+            F.col("payment_type").isNotNull()
+            & (~F.col("payment_type").isin(*sorted(VALID_PAYMENT_TYPES))),
+            F.lit("invalid_payment_type"),
+        ),
+        F.when(F.col("_duplicate_rank") > 1, F.lit("duplicate_record")),
+        F.when(F.col("trip_duration_hours") < 0, F.lit("dropoff_before_pickup")),
+        F.when(
+            F.col("trip_duration_hours") > F.lit(thresholds.max_trip_duration_hours),
+            F.lit("trip_duration_exceeds_max"),
+        ),
+        F.when(F.col("passenger_count") <= 0, F.lit("passenger_count_le_zero")),
+        F.when(
+            F.col("passenger_count") > F.lit(thresholds.max_passenger_count),
+            F.lit("passenger_count_exceeds_max"),
+        ),
+        F.when(F.col("trip_distance") <= 0, F.lit("trip_distance_le_zero")),
+        F.when(
+            F.col("trip_distance") > F.lit(thresholds.max_trip_distance),
+            F.lit("trip_distance_exceeds_max"),
+        ),
+        F.when(F.col("fare_amount") < 0, F.lit("fare_amount_lt_zero")),
+        F.when(
+            F.col("total_amount") < F.col("fare_amount"),
+            F.lit("total_amount_lt_fare_amount"),
+        ),
+        F.when(
+            (F.col("payment_type") == F.lit(2)) & (F.coalesce(F.col("tip_amount"), F.lit(0.0)) > 0),
+            F.lit("cash_payment_with_tip"),
+        ),
+    ]
+    warning_reason_candidates = [
+        F.when(
+            F.col("trip_duration_hours") > F.lit(thresholds.warning_trip_duration_hours),
+            F.lit("trip_duration_outlier"),
+        ),
+        F.when(
+            F.col("trip_distance") > F.lit(thresholds.warning_trip_distance),
+            F.lit("trip_distance_outlier"),
+        ),
+        F.when(
+            F.col("fare_amount") > F.lit(thresholds.warning_fare_amount),
+            F.lit("fare_amount_outlier"),
+        ),
+    ]
+
+    enriched_df = enriched_df.withColumn(
+        "_error_reasons",
+        F.array_remove(F.array(*error_reason_candidates), F.lit(None)),
+    ).withColumn(
+        "_warning_reasons",
+        F.array_remove(F.array(*warning_reason_candidates), F.lit(None)),
+    )
+
+    enriched_df = enriched_df.withColumn(
+        "error_reason",
+        F.concat_ws("|", F.col("_error_reasons")),
+    ).withColumn(
+        "warning_reason",
+        F.concat_ws("|", F.col("_warning_reasons")),
+    ).withColumn(
+        "is_valid",
+        F.size(F.col("_error_reasons")) == 0,
+    ).withColumn(
+        "is_outlier",
+        F.size(F.col("_warning_reasons")) > 0,
+    )
+
+    return enriched_df.drop("_duplicate_rank", "_error_reasons", "_warning_reasons")
+
+
+def _summarize_spark_df(enriched_df: Any) -> Dict[str, Any]:
+    if F is None:
+        raise RuntimeError("pyspark is required for Glue DataFrame execution")
+
+    aggregate_row = enriched_df.agg(
+        F.count("*").alias("total_records"),
+        F.sum(F.when(F.col("is_valid"), F.lit(1)).otherwise(F.lit(0))).alias("valid_records"),
+        F.sum(F.when(~F.col("is_valid"), F.lit(1)).otherwise(F.lit(0))).alias("invalid_records"),
+        F.sum(F.when(F.col("is_outlier"), F.lit(1)).otherwise(F.lit(0))).alias("outlier_records"),
+    ).collect()[0]
+
+    summary: Dict[str, Any] = {
+        "total_records": int(aggregate_row["total_records"]),
+        "valid_records": int(aggregate_row["valid_records"]),
+        "invalid_records": int(aggregate_row["invalid_records"]),
+        "outlier_records": int(aggregate_row["outlier_records"]),
+        "error_counts": {},
+        "warning_counts": {},
+    }
+
+    error_rows = (
+        enriched_df.where(F.col("error_reason") != "")
+        .select(F.explode(F.split(F.col("error_reason"), r"\|")).alias("reason"))
+        .groupBy("reason")
+        .count()
+        .collect()
+    )
+    for row in error_rows:
+        summary["error_counts"][row["reason"]] = int(row["count"])
+
+    warning_rows = (
+        enriched_df.where(F.col("warning_reason") != "")
+        .select(F.explode(F.split(F.col("warning_reason"), r"\|")).alias("reason"))
+        .groupBy("reason")
+        .count()
+        .collect()
+    )
+    for row in warning_rows:
+        summary["warning_counts"][row["reason"]] = int(row["count"])
+
+    return summary
+
+
 def transform_glue_collection(
+    glue_context: Any,
     frame_collection: Any,
     *,
     input_key: str = DEFAULT_INPUT_KEY,
     output_key: str = CANONICAL_OUTPUT_KEY,
 ) -> Dict[str, Any]:
-    """Phase-1 placeholder for Glue collection handling.
-
-    Phase 1 keeps the adapter intentionally lightweight. Later phases will
-    replace this with DynamicFrame-aware logic and observability.
-    """
+    """Run the transform in Glue if possible, otherwise use a local fallback."""
 
     if frame_collection is None:
         raise ValueError("frame_collection is required")
 
+    if (
+        DynamicFrameCollection is not None
+        and DynamicFrame is not None
+        and hasattr(frame_collection, "select")
+        and glue_context is not None
+    ):
+        input_frame = frame_collection.select(input_key)
+        input_df = input_frame.toDF()
+        enriched_df = _transform_spark_df(input_df)
+        summary = _summarize_spark_df(enriched_df)
+        _log_summary(summary)
+        processed_df = enriched_df.where(F.col("is_valid")).select(*PROCESSED_OUTPUT_COLUMNS)
+        processed_dynamic_frame = DynamicFrame.fromDF(processed_df, glue_context, output_key)
+        return DynamicFrameCollection({output_key: processed_dynamic_frame}, glue_context)
+
+    if isinstance(frame_collection, Mapping):
+        input_records = frame_collection.get(input_key, frame_collection.get(output_key))
+        if input_records is None:
+            raise KeyError(f"Could not find input records for key '{input_key}'")
+    else:
+        input_records = frame_collection
+
+    local_result = run_local_transform(input_records)
     return {
-        "input_key": input_key,
         "output_key": output_key,
-        "frame_collection": frame_collection,
+        "processed_records": local_result["processed_records"],
+        "summary": local_result["summary"],
     }
 
 
@@ -370,8 +680,8 @@ def glue_studio_transform(
     the callable stable while the implementation evolves across phases.
     """
 
-    del glue_context
     return transform_glue_collection(
+        glue_context,
         frame_collection,
         input_key=input_key,
         output_key=output_key,
@@ -382,12 +692,16 @@ __all__: Sequence[str] = (
     "CANONICAL_OUTPUT_KEY",
     "CANONICAL_COLUMNS",
     "DEFAULT_INPUT_KEY",
+    "PROCESSED_OUTPUT_COLUMNS",
     "RAW_TO_CANONICAL_MAP",
     "TransformContract",
     "ValidationThresholds",
+    "filter_processed_records",
     "get_transform_contract",
     "glue_studio_transform",
     "normalize_record",
+    "run_local_transform",
+    "summarize_transformed_records",
     "transform_glue_collection",
     "transform_records",
 )

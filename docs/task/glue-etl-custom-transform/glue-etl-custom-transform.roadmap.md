@@ -121,7 +121,7 @@ Exit criteria:
 
 ### Phase 4: Output and observability
 
-Status: `pending`
+Status: `completed`
 
 Tasks:
 
@@ -186,3 +186,5 @@ Use this section for resumable updates. Append new entries instead of rewriting 
 - Added raw-to-canonical field mapping and basic type coercion so the transform can tolerate either raw parquet names or renamed Glue columns.
 - Added record enrichment with `trip_duration_hours`, `is_valid`, `error_reason`, `warning_reason`, and `is_outlier`.
 - Implemented hard-failure checks for required fields, duplicates, categorical validity, time logic, passenger count, distance, fare, and cash-tip inconsistency.
+- Finalized the single-output contract so only valid processed rows are emitted downstream.
+- Added summary logging for total, valid, invalid, outlier, and reason-level counts, with Glue/Spark execution when runtime libraries are available.
