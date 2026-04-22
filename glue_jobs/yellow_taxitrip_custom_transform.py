@@ -7,6 +7,8 @@ fits Glue Studio custom-transform usage.
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -161,6 +163,8 @@ PROCESSED_OUTPUT_COLUMNS: Sequence[str] = (
 )
 
 LOGGER = logging.getLogger(__name__)
+if not LOGGER.handlers:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
 
 def get_transform_contract() -> TransformContract:
@@ -431,6 +435,46 @@ def run_local_transform(records: Iterable[MutableMapping[str, Any]]) -> Dict[str
     }
 
 
+def _load_parquet_records(parquet_path: str) -> List[Dict[str, Any]]:
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:  # pragma: no cover - optional local dependency.
+        raise RuntimeError(
+            "pyarrow is required for local parquet smoke tests"
+        ) from exc
+
+    return pq.read_table(parquet_path).to_pylist()
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run the Manhattan DataWays Glue ETL custom transform locally."
+    )
+    parser.add_argument(
+        "parquet_path",
+        help="Path to a parquet file to validate locally.",
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Print only the summary payload.",
+    )
+    args = parser.parse_args(argv)
+
+    result = run_local_transform(_load_parquet_records(args.parquet_path))
+    payload: Dict[str, Any] = {"summary": result["summary"]}
+    if not args.summary_only:
+        payload["processed_sample"] = result["processed_records"][:3]
+        payload["invalid_sample"] = [
+            record
+            for record in result["transformed_records"]
+            if not record.get("is_valid")
+        ][:3]
+
+    print(json.dumps(payload, default=str, indent=2))
+    return 0
+
+
 def _normalize_spark_input_df(input_df: Any) -> Any:
     if F is None:
         raise RuntimeError("pyspark is required for Glue DataFrame execution")
@@ -699,9 +743,14 @@ __all__: Sequence[str] = (
     "filter_processed_records",
     "get_transform_contract",
     "glue_studio_transform",
+    "main",
     "normalize_record",
     "run_local_transform",
     "summarize_transformed_records",
     "transform_glue_collection",
     "transform_records",
 )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

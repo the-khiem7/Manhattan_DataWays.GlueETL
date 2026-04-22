@@ -19,7 +19,17 @@ The repository currently contains:
 - An empty `glue_jobs/` folder
 - An empty task folder at `docs/task/glue-etl-custom-transform/`
 
-There is no tracked Glue custom-transform Python script in the repository yet.
+The repository now contains the implementation entrypoint at:
+
+- `glue_jobs/yellow_taxitrip_custom_transform.py`
+
+The code supports:
+
+- local smoke testing against parquet input
+- canonical schema normalization
+- validation and rejection of invalid rows
+- single-output processed flow with no quarantine sink
+- summary logging for rejection reasons
 
 ## Confirmed Visual Job State
 
@@ -119,3 +129,16 @@ This task group is complete when:
 - validation rules are documented and reproducible
 - resume status is visible from the roadmap document alone
 - the use guide is sufficient for another engineer to run or continue the task without prior conversation context
+
+## Current Implementation Snapshot
+
+Local smoke testing against the 50-row parquet sample currently produces:
+
+- 50 input rows
+- 45 processed rows
+- 5 rejected rows
+- rejection reasons observed:
+  - `passenger_count_le_zero`: 3
+  - `fare_amount_lt_zero`: 2
+  - `total_amount_lt_fare_amount`: 2
+  - `cash_payment_with_tip`: 1

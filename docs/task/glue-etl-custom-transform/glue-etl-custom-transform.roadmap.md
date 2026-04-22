@@ -138,7 +138,7 @@ Exit criteria:
 
 ### Phase 5: Validation and documentation closeout
 
-Status: `pending`
+Status: `completed`
 
 Tasks:
 
@@ -188,3 +188,5 @@ Use this section for resumable updates. Append new entries instead of rewriting 
 - Implemented hard-failure checks for required fields, duplicates, categorical validity, time logic, passenger count, distance, fare, and cash-tip inconsistency.
 - Finalized the single-output contract so only valid processed rows are emitted downstream.
 - Added summary logging for total, valid, invalid, outlier, and reason-level counts, with Glue/Spark execution when runtime libraries are available.
+- Added a local CLI smoke-test path so the transform can be rerun directly against parquet input.
+- Verified the current behavior on `data/taxi_data_50_rows.parquet`: 50 input, 45 processed, 5 rejected.

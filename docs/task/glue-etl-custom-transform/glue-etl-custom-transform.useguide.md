@@ -114,6 +114,24 @@ If available in the Glue runtime, also publish counters to CloudWatch-compatible
 5. Run the job and inspect logs for rejected-row statistics.
 6. Update the roadmap document with actual implementation status.
 
+## Local Smoke Test
+
+Run this command from the repository root:
+
+```powershell
+python glue_jobs/yellow_taxitrip_custom_transform.py data/taxi_data_50_rows.parquet --summary-only
+```
+
+Current expected summary for the 50-row sample:
+
+- `total_records = 50`
+- `valid_records = 45`
+- `invalid_records = 5`
+- `error_counts.passenger_count_le_zero = 3`
+- `error_counts.fare_amount_lt_zero = 2`
+- `error_counts.total_amount_lt_fare_amount = 2`
+- `error_counts.cash_payment_with_tip = 1`
+
 ## Practical Notes For Glue Studio
 
 - Use `Change Schema` for simple casting and renaming, not for dense business validation logic.
