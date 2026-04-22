@@ -52,7 +52,7 @@ Open implementation decisions:
 
 ### Phase 1: Baseline and contract
 
-Status: `pending`
+Status: `completed`
 
 Tasks:
 
@@ -180,3 +180,5 @@ Use this section for resumable updates. Append new entries instead of rewriting 
 - Confirmed that `glue_jobs/` is present but has no tracked script yet.
 - Confirmed that `README.md` still describes quarantine output, but current task scope removes that output.
 - Confirmed from the 50-row parquet sample that real invalid examples already exist for validation testing.
+- Created `glue_jobs/yellow_taxitrip_custom_transform.py` as the initial script skeleton.
+- Declared the current transform contract with a single `processed` output and no quarantine sink.
